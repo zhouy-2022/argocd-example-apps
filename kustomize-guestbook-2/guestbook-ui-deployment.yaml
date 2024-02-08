@@ -1,8 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: zhouyu-ui
-spec:
+  name: guestbook-ui
   replicas: 2
   revisionHistoryLimit: 3
   selector:
@@ -11,7 +10,7 @@ spec:
   template:
     metadata:
       labels:
-        app: zhouyu-ui
+        app: guestbook-ui
     spec:
       containers:
       - image: gcr.io/heptio-images/ks-guestbook-demo:0.1
