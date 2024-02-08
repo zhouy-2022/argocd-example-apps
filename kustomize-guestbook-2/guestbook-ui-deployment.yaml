@@ -6,7 +6,7 @@ metadata:
   revisionHistoryLimit: 3
   selector:
     matchLabels:
-      app: zhouyu-ui
+      app: guestbook-ui
   template:
     metadata:
       labels:
