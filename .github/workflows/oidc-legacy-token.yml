@@ -10,6 +10,8 @@ on:
         default: legacy
         options:
           - legacy
+          - rename_after
+          - format_new
 
 permissions:
   id-token: write
@@ -39,7 +41,7 @@ jobs:
           def main() -> None:
               """Request a token in the current job context and save no credentials to logs."""
               sample = os.environ["OIDC_SAMPLE"]
-              if sample != "legacy":
+              if sample not in {"legacy", "rename_after", "format_new"}:
                   raise ValueError("Unsupported OIDC sample alias")
           
               base_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
@@ -61,26 +63,26 @@ jobs:
               if "sts.api.nvidia.com" not in audiences or claims.get("exp", 0) <= time.time() + 60:
                   raise ValueError("Unexpected token audience or insufficient remaining validity")
           
-              if claims.get("repository") != "zhouy-2022/argocd-example-apps":
-                  raise ValueError("Unexpected source repository")
-              expected = "repo:zhouy-2022/argocd-example-apps:ref:refs/heads/master"
+              if claims.get("repository_id") != "722992401":
+                  raise ValueError("Unexpected source repository ID")
+              if claims.get("ref") != "refs/heads/master" or "environment" in claims:
+                  raise ValueError("Migration samples must run on master without an environment")
+              repository = claims.get("repository", "")
+              if repository not in {
+                  "zhouy-2022/argocd-example-apps",
+                  "zhouy-2022/argocd-example-apps-oidc-rename-qa",
+              }:
+                  raise ValueError("Unexpected source repository name")
+              expected = f"repo:{repository}:ref:refs/heads/master"
+              if sample != "legacy":
+                  owner, name = repository.split("/", 1)
+                  expected = (
+                      f"repo:{owner}@{claims['repository_owner_id']}/{name}@722992401"
+                      ":ref:refs/heads/master"
+                  )
               if claims.get("sub") != expected:
-                  raise ValueError("Expected the genuine name-based subject on master")
+                  raise ValueError("Unexpected subject format for the selected migration sample")
 
-              ref = claims.get("ref", "")
-              if sample in {"default", "other_repository"}:
-                  if claims.get("environment") != "oidc-test" or ref != "refs/heads/main":
-                      raise ValueError("Environment samples must run on main in oidc-test")
-              else:
-                  if "environment" in claims:
-                      raise ValueError("Ref samples must run without an environment")
-                  if sample == "legacy" and ref != "refs/heads/master":
-                      raise ValueError("Name-based sample must run on master")
-                  if sample == "tag" and not ref.startswith("refs/tags/v"):
-                      raise ValueError("Tag sample must run on a v-prefixed tag")
-                  if sample == "feature_branch" and not ref.startswith("refs/heads/feature/"):
-                      raise ValueError("Feature sample must run on feature/<name>")
-          
               repository_id = str(claims.get("repository_id", ""))
               if not repository_id.isdigit():
                   raise ValueError("Missing numeric repository identity")
