@@ -1,0 +1,106 @@
+name: NGC OIDC name-based token sample
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: Token sample alias
+        type: choice
+        required: true
+        default: legacy
+        options:
+          - legacy
+
+permissions:
+  id-token: write
+
+jobs:
+  mint:
+    runs-on: [self-hosted, linux, ngc-oidc-qa]
+    steps:
+      - name: Save OIDC token privately
+        shell: bash
+        env:
+          OIDC_SAMPLE: ${{ inputs.sample }}
+        run: |
+          python3 - <<'PY'
+          """Save a real workflow-issued GitHub OIDC sample privately on a QA runner."""
+          
+          import base64
+          import json
+          import os
+          import tempfile
+          import time
+          from pathlib import Path
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+          
+          
+          def main() -> None:
+              """Request a token in the current job context and save no credentials to logs."""
+              sample = os.environ["OIDC_SAMPLE"]
+              if sample != "legacy":
+                  raise ValueError("Unsupported OIDC sample alias")
+          
+              base_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
+              separator = "&" if "?" in base_url else "?"
+              url = base_url + separator + urlencode({"audience": "sts.api.nvidia.com"})
+              request = Request(
+                  url,
+                  headers={"Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]},
+              )
+              with urlopen(request, timeout=30) as response:
+                  token = json.load(response)["value"]
+          
+              encoded = token.split(".")[1]
+              claims = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+              if claims.get("iss") != "https://token.actions.githubusercontent.com":
+                  raise ValueError("Unexpected GitHub issuer")
+              audiences = claims.get("aud", [])
+              audiences = [audiences] if isinstance(audiences, str) else audiences
+              if "sts.api.nvidia.com" not in audiences or claims.get("exp", 0) <= time.time() + 60:
+                  raise ValueError("Unexpected token audience or insufficient remaining validity")
+          
+              if claims.get("repository") != "zhouy-2022/argocd-example-apps":
+                  raise ValueError("Unexpected source repository")
+              expected = "repo:zhouy-2022/argocd-example-apps:ref:refs/heads/master"
+              if claims.get("sub") != expected:
+                  raise ValueError("Expected the genuine name-based subject on master")
+
+              ref = claims.get("ref", "")
+              if sample in {"default", "other_repository"}:
+                  if claims.get("environment") != "oidc-test" or ref != "refs/heads/main":
+                      raise ValueError("Environment samples must run on main in oidc-test")
+              else:
+                  if "environment" in claims:
+                      raise ValueError("Ref samples must run without an environment")
+                  if sample == "legacy" and ref != "refs/heads/master":
+                      raise ValueError("Name-based sample must run on master")
+                  if sample == "tag" and not ref.startswith("refs/tags/v"):
+                      raise ValueError("Tag sample must run on a v-prefixed tag")
+                  if sample == "feature_branch" and not ref.startswith("refs/heads/feature/"):
+                      raise ValueError("Feature sample must run on feature/<name>")
+          
+              repository_id = str(claims.get("repository_id", ""))
+              if not repository_id.isdigit():
+                  raise ValueError("Missing numeric repository identity")
+              directory = Path.home() / ".cache/ngc-oidc/github" / repository_id
+              directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+              os.chmod(directory, 0o700)
+              path = directory / f"{sample}.jwt"
+              temporary_path = None
+              try:
+                  with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as output:
+                      temporary_path = Path(output.name)
+                      os.chmod(temporary_path, 0o600)
+                      output.write(token)
+                  os.replace(temporary_path, path)
+              finally:
+                  if temporary_path is not None:
+                      temporary_path.unlink(missing_ok=True)
+              print(f"Saved {sample} sample for repository ID {repository_id}; token value omitted.")
+          
+          
+          if __name__ == "__main__":
+              main()
+          PY
